@@ -21,7 +21,7 @@ def error_response(message: str, status: int = 400):
     }), status
 
 
-def require_api_key() -> Tuple[bool, Response]:
+def require_api_key() -> Tuple[bool, Response | None]:
     key = request.args.get("key", "").strip()
     if not API_KEY or key != API_KEY:
         return False, Response("Unauthorized", status=401)
@@ -59,10 +59,11 @@ def clamp_page(page: int, page_count: int) -> int:
 
 def render_pdf_page(pdf_bytes: bytes, page_index: int, scale: float, out_format: str) -> Tuple[bytes, str]:
     pdf = pdfium.PdfDocument(pdf_bytes)
+
     try:
         page_count = len(pdf)
         if page_count <= 0:
-          raise ValueError("PDF enthält keine Seiten.")
+            raise ValueError("PDF enthält keine Seiten.")
 
         page_index = clamp_page(page_index, page_count)
         page = pdf[page_index]
@@ -70,15 +71,13 @@ def render_pdf_page(pdf_bytes: bytes, page_index: int, scale: float, out_format:
         bitmap = page.render(
             scale=scale,
             rotation=0,
-            crop=(0, 0, 0, 0),
-            maybe_alpha=False
+            crop=(0, 0, 0, 0)
         )
 
         pil_image: Image.Image = bitmap.to_pil()
-
         out = io.BytesIO()
 
-        if out_format == "jpg" or out_format == "jpeg":
+        if out_format in {"jpg", "jpeg"}:
             if pil_image.mode != "RGB":
                 pil_image = pil_image.convert("RGB")
             pil_image.save(out, format="JPEG", quality=95, optimize=True)
@@ -92,6 +91,7 @@ def render_pdf_page(pdf_bytes: bytes, page_index: int, scale: float, out_format:
 
         pil_image.save(out, format="PNG", optimize=True)
         return out.getvalue(), "image/png"
+
     finally:
         pdf.close()
 
@@ -101,6 +101,7 @@ def health():
     ok, resp = require_api_key()
     if not ok:
         return resp
+
     return jsonify({
         "ok": True,
         "service": "sunrise-pdf-renderer"
