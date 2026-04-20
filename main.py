@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 API_KEY = os.environ.get("API_KEY", "DEIN_RENDERER_API_KEY")
 MAX_FILE_MB = int(os.environ.get("MAX_FILE_MB", "25"))
-DEFAULT_SCALE = float(os.environ.get("DEFAULT_SCALE", "2.4"))
+DEFAULT_SCALE = float(os.environ.get("DEFAULT_SCALE", "3.0"))
 DEFAULT_FORMAT = os.environ.get("DEFAULT_FORMAT", "png").lower()
 
 
@@ -57,6 +57,49 @@ def clamp_page(page: int, page_count: int) -> int:
     return page
 
 
+def is_near_white(pixel, threshold=245):
+    if isinstance(pixel, int):
+        return pixel >= threshold
+
+    if len(pixel) >= 3:
+        return pixel[0] >= threshold and pixel[1] >= threshold and pixel[2] >= threshold
+
+    return False
+
+
+def trim_bottom_white_rows(
+    image: Image.Image,
+    threshold: int = 245,
+    min_non_white_ratio: float = 0.01
+) -> Image.Image:
+    if image.mode not in ("RGB", "RGBA", "L"):
+        image = image.convert("RGB")
+
+    width, height = image.size
+    pixels = image.load()
+
+    cutoff_y = height
+
+    for y in range(height - 1, -1, -1):
+        non_white = 0
+
+        for x in range(width):
+            px = pixels[x, y]
+            if not is_near_white(px, threshold):
+                non_white += 1
+
+        ratio = non_white / width
+
+        if ratio >= min_non_white_ratio:
+            cutoff_y = y + 1
+            break
+
+    if cutoff_y < height:
+        return image.crop((0, 0, width, cutoff_y))
+
+    return image
+
+
 def render_pdf_page(pdf_bytes: bytes, page_index: int, scale: float, out_format: str) -> Tuple[bytes, str]:
     pdf = pdfium.PdfDocument(pdf_bytes)
 
@@ -75,6 +118,8 @@ def render_pdf_page(pdf_bytes: bytes, page_index: int, scale: float, out_format:
         )
 
         pil_image: Image.Image = bitmap.to_pil()
+        pil_image = trim_bottom_white_rows(pil_image)
+
         out = io.BytesIO()
 
         if out_format in {"jpg", "jpeg"}:
