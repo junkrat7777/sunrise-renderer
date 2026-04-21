@@ -10,8 +10,8 @@ app = Flask(__name__)
 
 API_KEY = os.environ.get("API_KEY", "DEIN_RENDERER_API_KEY")
 MAX_FILE_MB = int(os.environ.get("MAX_FILE_MB", "25"))
-DEFAULT_SCALE = float(os.environ.get("DEFAULT_SCALE", "1.0"))
-DEFAULT_FORMAT = os.environ.get("DEFAULT_FORMAT", "jpg").lower()
+DEFAULT_SCALE = float(os.environ.get("DEFAULT_SCALE", "3.0"))
+DEFAULT_FORMAT = os.environ.get("DEFAULT_FORMAT", "png").lower()
 
 
 def error_response(message: str, status: int = 400):
@@ -57,102 +57,47 @@ def clamp_page(page: int, page_count: int) -> int:
     return page
 
 
-def is_background_pixel(pixel, threshold=235):
-    """
-    Erkennt helle Hintergrundpixel.
-    Schneidet damit auch hellgraue / fast weiße Flächen weg.
-    """
+def is_near_white(pixel, threshold=245):
     if isinstance(pixel, int):
         return pixel >= threshold
 
     if len(pixel) >= 3:
-        r, g, b = pixel[0], pixel[1], pixel[2]
-        return r >= threshold and g >= threshold and b >= threshold
+        return pixel[0] >= threshold and pixel[1] >= threshold and pixel[2] >= threshold
 
     return False
 
 
-def find_content_bounds(
+def trim_bottom_white_rows(
     image: Image.Image,
-    bg_threshold: int = 235,
-    min_non_bg_ratio_row: float = 0.02,
-    min_non_bg_ratio_col: float = 0.02
-):
-    """
-    Findet die tatsächlichen Inhaltsgrenzen und ignoriert helle Randflächen.
-    """
+    threshold: int = 245,
+    min_non_white_ratio: float = 0.01
+) -> Image.Image:
     if image.mode not in ("RGB", "RGBA", "L"):
         image = image.convert("RGB")
 
     width, height = image.size
-    px = image.load()
+    pixels = image.load()
 
-    top = 0
-    bottom = height - 1
-    left = 0
-    right = width - 1
+    cutoff_y = height
 
-    # Top
-    for y in range(height):
-      non_bg = 0
-      for x in range(width):
-          if not is_background_pixel(px[x, y], bg_threshold):
-              non_bg += 1
-      if (non_bg / width) >= min_non_bg_ratio_row:
-          top = y
-          break
-
-    # Bottom
     for y in range(height - 1, -1, -1):
-      non_bg = 0
-      for x in range(width):
-          if not is_background_pixel(px[x, y], bg_threshold):
-              non_bg += 1
-      if (non_bg / width) >= min_non_bg_ratio_row:
-          bottom = y
-          break
+        non_white = 0
 
-    # Left
-    for x in range(width):
-      non_bg = 0
-      for y in range(height):
-          if not is_background_pixel(px[x, y], bg_threshold):
-              non_bg += 1
-      if (non_bg / height) >= min_non_bg_ratio_col:
-          left = x
-          break
+        for x in range(width):
+            px = pixels[x, y]
+            if not is_near_white(px, threshold):
+                non_white += 1
 
-    # Right
-    for x in range(width - 1, -1, -1):
-      non_bg = 0
-      for y in range(height):
-          if not is_background_pixel(px[x, y], bg_threshold):
-              non_bg += 1
-      if (non_bg / height) >= min_non_bg_ratio_col:
-          right = x
-          break
+        ratio = non_white / width
 
-    return left, top, right, bottom
+        if ratio >= min_non_white_ratio:
+            cutoff_y = y + 1
+            break
 
+    if cutoff_y < height:
+        return image.crop((0, 0, width, cutoff_y))
 
-def trim_background_borders(image: Image.Image) -> Image.Image:
-    """
-    Entfernt helle / leere Randflächen an allen Seiten.
-    """
-    if image.mode not in ("RGB", "RGBA", "L"):
-        image = image.convert("RGB")
-
-    left, top, right, bottom = find_content_bounds(
-        image,
-        bg_threshold=235,
-        min_non_bg_ratio_row=0.02,
-        min_non_bg_ratio_col=0.02
-    )
-
-    if right <= left or bottom <= top:
-        return image
-
-    return image.crop((left, top, right + 1, bottom + 1))
+    return image
 
 
 def render_pdf_page(pdf_bytes: bytes, page_index: int, scale: float, out_format: str) -> Tuple[bytes, str]:
@@ -172,24 +117,24 @@ def render_pdf_page(pdf_bytes: bytes, page_index: int, scale: float, out_format:
             crop=(0, 0, 0, 0)
         )
 
-        image: Image.Image = bitmap.to_pil()
-        image = trim_background_borders(image)
+        pil_image: Image.Image = bitmap.to_pil()
+        pil_image = trim_bottom_white_rows(pil_image)
 
         out = io.BytesIO()
 
         if out_format in {"jpg", "jpeg"}:
-            if image.mode != "RGB":
-                image = image.convert("RGB")
-            image.save(out, format="JPEG", quality=92, optimize=True)
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
+            pil_image.save(out, format="JPEG", quality=95, optimize=True)
             return out.getvalue(), "image/jpeg"
 
         if out_format == "webp":
-            if image.mode != "RGB":
-                image = image.convert("RGB")
-            image.save(out, format="WEBP", quality=92, method=6)
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
+            pil_image.save(out, format="WEBP", quality=95, method=6)
             return out.getvalue(), "image/webp"
 
-        image.save(out, format="PNG", optimize=True)
+        pil_image.save(out, format="PNG", optimize=True)
         return out.getvalue(), "image/png"
 
     finally:
