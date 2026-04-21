@@ -10,8 +10,8 @@ app = Flask(__name__)
 
 API_KEY = os.environ.get("API_KEY", "DEIN_RENDERER_API_KEY")
 MAX_FILE_MB = int(os.environ.get("MAX_FILE_MB", "25"))
-DEFAULT_SCALE = float(os.environ.get("DEFAULT_SCALE", "3.0"))
-DEFAULT_FORMAT = os.environ.get("DEFAULT_FORMAT", "png").lower()
+DEFAULT_SCALE = float(os.environ.get("DEFAULT_SCALE", "1.0"))
+DEFAULT_FORMAT = os.environ.get("DEFAULT_FORMAT", "jpg").lower()
 
 
 def error_response(message: str, status: int = 400):
@@ -67,37 +67,72 @@ def is_near_white(pixel, threshold=245):
     return False
 
 
-def trim_bottom_white_rows(
+def trim_white_borders(
     image: Image.Image,
     threshold: int = 245,
-    min_non_white_ratio: float = 0.01
+    min_non_white_ratio_row: float = 0.01,
+    min_non_white_ratio_col: float = 0.01
 ) -> Image.Image:
+    """
+    Schneidet weiße Ränder oben, unten, links und rechts weg.
+    Besonders wichtig für den großen weißen Streifen rechts.
+    """
     if image.mode not in ("RGB", "RGBA", "L"):
         image = image.convert("RGB")
 
     width, height = image.size
     pixels = image.load()
 
-    cutoff_y = height
+    top = 0
+    bottom = height - 1
+    left = 0
+    right = width - 1
 
-    for y in range(height - 1, -1, -1):
+    # Top
+    for y in range(0, height):
         non_white = 0
-
         for x in range(width):
-            px = pixels[x, y]
-            if not is_near_white(px, threshold):
+            if not is_near_white(pixels[x, y], threshold):
                 non_white += 1
-
-        ratio = non_white / width
-
-        if ratio >= min_non_white_ratio:
-            cutoff_y = y + 1
+        if (non_white / width) >= min_non_white_ratio_row:
+            top = y
             break
 
-    if cutoff_y < height:
-        return image.crop((0, 0, width, cutoff_y))
+    # Bottom
+    for y in range(height - 1, -1, -1):
+        non_white = 0
+        for x in range(width):
+            if not is_near_white(pixels[x, y], threshold):
+                non_white += 1
+        if (non_white / width) >= min_non_white_ratio_row:
+            bottom = y
+            break
 
-    return image
+    # Left
+    for x in range(0, width):
+        non_white = 0
+        for y in range(height):
+            if not is_near_white(pixels[x, y], threshold):
+                non_white += 1
+        if (non_white / height) >= min_non_white_ratio_col:
+            left = x
+            break
+
+    # Right
+    for x in range(width - 1, -1, -1):
+        non_white = 0
+        for y in range(height):
+            if not is_near_white(pixels[x, y], threshold):
+                non_white += 1
+        if (non_white / height) >= min_non_white_ratio_col:
+            right = x
+            break
+
+    # Sicherheitsnetz
+    if right <= left or bottom <= top:
+        return image
+
+    return image.crop((left, top, right + 1, bottom + 1))
 
 
 def render_pdf_page(pdf_bytes: bytes, page_index: int, scale: float, out_format: str) -> Tuple[bytes, str]:
@@ -118,20 +153,28 @@ def render_pdf_page(pdf_bytes: bytes, page_index: int, scale: float, out_format:
         )
 
         pil_image: Image.Image = bitmap.to_pil()
-        pil_image = trim_bottom_white_rows(pil_image)
+
+        # 🔥 Wichtig
+        # Schneidet weiße Ränder komplett weg
+        pil_image = trim_white_borders(
+            pil_image,
+            threshold=245,
+            min_non_white_ratio_row=0.01,
+            min_non_white_ratio_col=0.01
+        )
 
         out = io.BytesIO()
 
         if out_format in {"jpg", "jpeg"}:
             if pil_image.mode != "RGB":
                 pil_image = pil_image.convert("RGB")
-            pil_image.save(out, format="JPEG", quality=95, optimize=True)
+            pil_image.save(out, format="JPEG", quality=92, optimize=True)
             return out.getvalue(), "image/jpeg"
 
         if out_format == "webp":
             if pil_image.mode != "RGB":
                 pil_image = pil_image.convert("RGB")
-            pil_image.save(out, format="WEBP", quality=95, method=6)
+            pil_image.save(out, format="WEBP", quality=92, method=6)
             return out.getvalue(), "image/webp"
 
         pil_image.save(out, format="PNG", optimize=True)
