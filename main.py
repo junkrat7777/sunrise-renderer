@@ -57,31 +57,35 @@ def clamp_page(page: int, page_count: int) -> int:
     return page
 
 
-def is_near_white(pixel, threshold=245):
+def is_background_pixel(pixel, threshold=235):
+    """
+    Erkennt helle Hintergrundpixel.
+    Schneidet damit auch hellgraue / fast weiße Flächen weg.
+    """
     if isinstance(pixel, int):
         return pixel >= threshold
 
     if len(pixel) >= 3:
-        return pixel[0] >= threshold and pixel[1] >= threshold and pixel[2] >= threshold
+        r, g, b = pixel[0], pixel[1], pixel[2]
+        return r >= threshold and g >= threshold and b >= threshold
 
     return False
 
 
-def trim_white_borders(
+def find_content_bounds(
     image: Image.Image,
-    threshold: int = 245,
-    min_non_white_ratio_row: float = 0.01,
-    min_non_white_ratio_col: float = 0.01
-) -> Image.Image:
+    bg_threshold: int = 235,
+    min_non_bg_ratio_row: float = 0.02,
+    min_non_bg_ratio_col: float = 0.02
+):
     """
-    Schneidet weiße Ränder oben, unten, links und rechts weg.
-    Besonders wichtig für den großen weißen Streifen rechts.
+    Findet die tatsächlichen Inhaltsgrenzen und ignoriert helle Randflächen.
     """
     if image.mode not in ("RGB", "RGBA", "L"):
         image = image.convert("RGB")
 
     width, height = image.size
-    pixels = image.load()
+    px = image.load()
 
     top = 0
     bottom = height - 1
@@ -89,46 +93,62 @@ def trim_white_borders(
     right = width - 1
 
     # Top
-    for y in range(0, height):
-        non_white = 0
-        for x in range(width):
-            if not is_near_white(pixels[x, y], threshold):
-                non_white += 1
-        if (non_white / width) >= min_non_white_ratio_row:
-            top = y
-            break
+    for y in range(height):
+      non_bg = 0
+      for x in range(width):
+          if not is_background_pixel(px[x, y], bg_threshold):
+              non_bg += 1
+      if (non_bg / width) >= min_non_bg_ratio_row:
+          top = y
+          break
 
     # Bottom
     for y in range(height - 1, -1, -1):
-        non_white = 0
-        for x in range(width):
-            if not is_near_white(pixels[x, y], threshold):
-                non_white += 1
-        if (non_white / width) >= min_non_white_ratio_row:
-            bottom = y
-            break
+      non_bg = 0
+      for x in range(width):
+          if not is_background_pixel(px[x, y], bg_threshold):
+              non_bg += 1
+      if (non_bg / width) >= min_non_bg_ratio_row:
+          bottom = y
+          break
 
     # Left
-    for x in range(0, width):
-        non_white = 0
-        for y in range(height):
-            if not is_near_white(pixels[x, y], threshold):
-                non_white += 1
-        if (non_white / height) >= min_non_white_ratio_col:
-            left = x
-            break
+    for x in range(width):
+      non_bg = 0
+      for y in range(height):
+          if not is_background_pixel(px[x, y], bg_threshold):
+              non_bg += 1
+      if (non_bg / height) >= min_non_bg_ratio_col:
+          left = x
+          break
 
     # Right
     for x in range(width - 1, -1, -1):
-        non_white = 0
-        for y in range(height):
-            if not is_near_white(pixels[x, y], threshold):
-                non_white += 1
-        if (non_white / height) >= min_non_white_ratio_col:
-            right = x
-            break
+      non_bg = 0
+      for y in range(height):
+          if not is_background_pixel(px[x, y], bg_threshold):
+              non_bg += 1
+      if (non_bg / height) >= min_non_bg_ratio_col:
+          right = x
+          break
 
-    # Sicherheitsnetz
+    return left, top, right, bottom
+
+
+def trim_background_borders(image: Image.Image) -> Image.Image:
+    """
+    Entfernt helle / leere Randflächen an allen Seiten.
+    """
+    if image.mode not in ("RGB", "RGBA", "L"):
+        image = image.convert("RGB")
+
+    left, top, right, bottom = find_content_bounds(
+        image,
+        bg_threshold=235,
+        min_non_bg_ratio_row=0.02,
+        min_non_bg_ratio_col=0.02
+    )
+
     if right <= left or bottom <= top:
         return image
 
@@ -152,32 +172,24 @@ def render_pdf_page(pdf_bytes: bytes, page_index: int, scale: float, out_format:
             crop=(0, 0, 0, 0)
         )
 
-        pil_image: Image.Image = bitmap.to_pil()
-
-        # 🔥 Wichtig
-        # Schneidet weiße Ränder komplett weg
-        pil_image = trim_white_borders(
-            pil_image,
-            threshold=245,
-            min_non_white_ratio_row=0.01,
-            min_non_white_ratio_col=0.01
-        )
+        image: Image.Image = bitmap.to_pil()
+        image = trim_background_borders(image)
 
         out = io.BytesIO()
 
         if out_format in {"jpg", "jpeg"}:
-            if pil_image.mode != "RGB":
-                pil_image = pil_image.convert("RGB")
-            pil_image.save(out, format="JPEG", quality=92, optimize=True)
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            image.save(out, format="JPEG", quality=92, optimize=True)
             return out.getvalue(), "image/jpeg"
 
         if out_format == "webp":
-            if pil_image.mode != "RGB":
-                pil_image = pil_image.convert("RGB")
-            pil_image.save(out, format="WEBP", quality=92, method=6)
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            image.save(out, format="WEBP", quality=92, method=6)
             return out.getvalue(), "image/webp"
 
-        pil_image.save(out, format="PNG", optimize=True)
+        image.save(out, format="PNG", optimize=True)
         return out.getvalue(), "image/png"
 
     finally:
