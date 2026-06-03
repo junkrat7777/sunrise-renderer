@@ -7,7 +7,7 @@ from PIL import Image
 
 app = Flask(__name__)
 
-API_KEY = os.getenv("API_KEY", "DEIN_RENDERER_API_KEY")
+API_KEY = "DEIN_RENDERER_API_KEY"
 
 
 @app.get("/")
