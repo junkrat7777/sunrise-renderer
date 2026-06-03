@@ -6,8 +6,7 @@ from fastapi.responses import Response
 
 app = FastAPI()
 
-API_KEY = os.getenv("RENDERER_API_KEY", "DEIN_RENDERER_API_KEY")
-
+API_KEY = os.getenv("API_KEY", "DEIN_RENDERER_API_KEY")
 
 @app.get("/")
 def root():
