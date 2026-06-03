@@ -1,10 +1,8 @@
 from io import BytesIO
 import os
 
-import fitz
 from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.responses import Response
-from PIL import Image
 
 app = FastAPI()
 
@@ -31,6 +29,9 @@ async def render_pdf_page(
 ):
     if key != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    import fitz
+    from PIL import Image
 
     pdf_bytes = await file.read()
     if not pdf_bytes:
