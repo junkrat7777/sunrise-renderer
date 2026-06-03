@@ -1,6 +1,4 @@
-fastapi
+flask
 gunicorn
-uvicorn
 PyMuPDF
 Pillow
-python-multipart

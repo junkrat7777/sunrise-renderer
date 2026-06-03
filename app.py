@@ -1,63 +1,94 @@
 from io import BytesIO
 import os
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
-from fastapi.responses import Response
+import fitz
+from flask import Flask, request, jsonify, Response
+from PIL import Image
 
-app = FastAPI()
+app = Flask(__name__)
 
 API_KEY = os.getenv("API_KEY", "DEIN_RENDERER_API_KEY")
 
+
 @app.get("/")
 def root():
-    return {"ok": True, "service": "sunrise-renderer"}
+    return jsonify({
+        "ok": True,
+        "service": "sunrise-renderer"
+    })
 
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return jsonify({
+        "ok": True
+    })
 
 
 @app.post("/render-pdf-page")
-async def render_pdf_page(
-    key: str = Query(...),
-    page: int = Query(0),
-    scale: float = Query(2.0),
-    format: str = Query("png"),
-    file: UploadFile = File(...)
-):
-    if key != API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+def render_pdf_page():
+    try:
+        key = request.args.get("key", "")
+        page = int(request.args.get("page", "0"))
+        scale = float(request.args.get("scale", "2.0"))
+        fmt = request.args.get("format", "png").lower()
 
-    import fitz
-    from PIL import Image
+        if key != API_KEY:
+            return jsonify({
+                "ok": False,
+                "error": "Unauthorized"
+            }), 401
 
-    pdf_bytes = await file.read()
-    if not pdf_bytes:
-        raise HTTPException(status_code=400, detail="Empty PDF")
+        uploaded = request.files.get("file")
 
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if not uploaded:
+            return jsonify({
+                "ok": False,
+                "error": "file missing"
+            }), 400
 
-    if page < 0 or page >= doc.page_count:
-        raise HTTPException(status_code=400, detail="Page out of range")
+        pdf_bytes = uploaded.read()
 
-    pix = doc.load_page(page).get_pixmap(
-        matrix=fitz.Matrix(scale, scale),
-        alpha=False
-    )
+        if not pdf_bytes:
+            return jsonify({
+                "ok": False,
+                "error": "empty pdf"
+            }), 400
 
-    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-    buf = BytesIO()
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    fmt = format.lower()
+        if page < 0 or page >= doc.page_count:
+            return jsonify({
+                "ok": False,
+                "error": "page out of range",
+                "page_count": doc.page_count
+            }), 400
 
-    if fmt in ["jpg", "jpeg"]:
-        img.save(buf, format="JPEG", quality=95)
-        media = "image/jpeg"
-    else:
-        img.save(buf, format="PNG")
-        media = "image/png"
+        pix = doc.load_page(page).get_pixmap(
+            matrix=fitz.Matrix(scale, scale),
+            alpha=False
+        )
 
-    doc.close()
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        buf = BytesIO()
 
-    return Response(content=buf.getvalue(), media_type=media)
+        if fmt in ["jpg", "jpeg"]:
+            img.save(buf, format="JPEG", quality=95)
+            media_type = "image/jpeg"
+        else:
+            img.save(buf, format="PNG")
+            media_type = "image/png"
+
+        doc.close()
+
+        return Response(
+            buf.getvalue(),
+            mimetype=media_type
+        )
+
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "type": type(e).__name__
+        }), 500
